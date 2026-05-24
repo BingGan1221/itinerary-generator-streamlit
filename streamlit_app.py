@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from html import escape
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ from generate_itinerary import (
     DEFAULT_TEMPLATE,
     DEFAULT_TRIP_FIELDS,
     fill_document,
+    format_chinese_date,
     load_config,
     output_path_from_config,
     read_order_data,
@@ -160,6 +162,98 @@ CSS = """
 [data-testid="stMetricValue"] {
   color: var(--accent-2);
 }
+
+.preview-wrap {
+  margin-top: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.84);
+  overflow: hidden;
+}
+
+.preview-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+  background: #f6f8f5;
+}
+
+.preview-title {
+  font-size: 1.18rem;
+  font-weight: 800;
+  color: var(--ink);
+  margin: 0 0 6px;
+}
+
+.preview-file {
+  color: var(--muted);
+  font-size: 0.88rem;
+  word-break: break-all;
+}
+
+.preview-count {
+  min-width: 76px;
+  text-align: right;
+}
+
+.preview-count b {
+  display: block;
+  color: var(--accent-2);
+  font-size: 1.8rem;
+  line-height: 1;
+}
+
+.preview-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+}
+
+.preview-item {
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.preview-item:nth-child(odd) {
+  border-right: 1px solid var(--line);
+}
+
+.preview-item.wide {
+  grid-column: 1 / -1;
+  border-right: 0;
+}
+
+.preview-label {
+  color: var(--muted);
+  font-size: 0.82rem;
+  margin-bottom: 4px;
+}
+
+.preview-value {
+  color: var(--ink);
+  font-weight: 650;
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+@media (max-width: 720px) {
+  .preview-head,
+  .preview-grid {
+    display: block;
+  }
+
+  .preview-count {
+    margin-top: 12px;
+    text-align: left;
+  }
+
+  .preview-item,
+  .preview-item:nth-child(odd) {
+    border-right: 0;
+  }
+}
 </style>
 """
 
@@ -230,10 +324,61 @@ def build_docx(
     leaders: str,
     leader_phone: str,
     template_path: Path,
-) -> tuple[bytes, str, int]:
+) -> tuple[bytes, str, int, dict[str, Any], list[dict[str, str]]]:
     config, passengers, output_name = prepare_itinerary(uploaded_excel, route, leaders, leader_phone)
     docx_bytes = build_docx_from_data(config, passengers, output_name, template_path)
-    return docx_bytes, output_name, len(passengers)
+    return docx_bytes, output_name, len(passengers), config, passengers
+
+
+def render_preview(config: dict[str, Any], passengers: list[dict[str, str]], filename: str) -> None:
+    start_date = format_chinese_date(str(config.get("start_date") or ""))
+    end_date = format_chinese_date(str(config.get("end_date") or ""))
+    travel_period = f"{start_date} 至 {end_date}" if start_date and end_date else "未识别"
+    route = escape(str(config.get("route") or ""))
+    leaders = escape(str(config.get("leaders") or ""))
+    leader_phone = escape(str(config.get("leader_phone") or ""))
+    operator = escape(str(config.get("operator") or ""))
+    operator_phone = escape(str(config.get("operator_phone") or ""))
+    st.markdown(
+        f"""
+        <div class="preview-wrap">
+          <div class="preview-head">
+            <div>
+              <p class="preview-title">行程单预览</p>
+              <div class="preview-file">{escape(filename)}</div>
+            </div>
+            <div class="preview-count">
+              <span>旅客人数</span>
+              <b>{len(passengers)}</b>
+            </div>
+          </div>
+          <div class="preview-grid">
+            <div class="preview-item wide">
+              <div class="preview-label">旅游路线</div>
+              <div class="preview-value">{route}</div>
+            </div>
+            <div class="preview-item">
+              <div class="preview-label">出行时间</div>
+              <div class="preview-value">{escape(travel_period)}</div>
+            </div>
+            <div class="preview-item">
+              <div class="preview-label">领队</div>
+              <div class="preview-value">{leaders}</div>
+            </div>
+            <div class="preview-item">
+              <div class="preview-label">领队电话</div>
+              <div class="preview-value">{leader_phone}</div>
+            </div>
+            <div class="preview-item">
+              <div class="preview-label">计调</div>
+              <div class="preview-value">{operator} / {operator_phone}</div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.dataframe(passengers, use_container_width=True, hide_index=True)
 
 
 def main() -> None:
@@ -296,7 +441,7 @@ def main() -> None:
         st.error(f"找不到模板文件：{DEFAULT_TEMPLATE}")
     elif generate:
         try:
-            docx_bytes, filename, passenger_count = build_docx(
+            docx_bytes, filename, passenger_count, preview_config, preview_passengers = build_docx(
                 uploaded_excel, route, leaders, leader_phone, DEFAULT_TEMPLATE
             )
         except SystemExit as exc:
@@ -316,6 +461,7 @@ def main() -> None:
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     use_container_width=True,
                 )
+            render_preview(preview_config, preview_passengers, filename)
     elif not can_generate:
         st.info("上传 Excel 并填写三个行程字段后即可生成。")
 
