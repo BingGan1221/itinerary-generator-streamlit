@@ -1,0 +1,15 @@
+.DS_Store
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local traveler data and generated documents
+input/
+output/
+examples/
+
+# Local defaults may contain names or phone numbers.
+config/trip_config.json
+
+# Streamlit local state
+.streamlit/secrets.toml
