@@ -1,17 +1,25 @@
 from __future__ import annotations
 
+from io import BytesIO
 import tempfile
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
 
 import streamlit as st
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.units import mm
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 from generate_itinerary import (
     DEFAULT_CONFIG,
     DEFAULT_TEMPLATE,
     DEFAULT_TRIP_FIELDS,
+    format_chinese_date,
     fill_document,
     load_config,
     output_path_from_config,
@@ -184,13 +192,12 @@ def write_uploaded_file(uploaded_file: Any, destination: Path) -> None:
     destination.write_bytes(uploaded_file.getbuffer())
 
 
-def build_docx(
+def prepare_itinerary(
     uploaded_excel: Any,
     route: str,
     leaders: str,
     leader_phone: str,
-    template_path: Path,
-) -> tuple[bytes, str, int]:
+) -> tuple[dict[str, Any], list[dict[str, str]], str]:
     with tempfile.TemporaryDirectory() as temp_dir_name:
         temp_dir = Path(temp_dir_name)
         excel_path = temp_dir / "order.xlsx"
@@ -211,46 +218,156 @@ def build_docx(
             config["route_name"] = order_data["route_name"]
 
         output_name = output_path_from_config(config, None).name
-        output_path = temp_dir / output_name
-        fill_document(template_path, output_path, config, order_data["passengers"])
-        return output_path.read_bytes(), output_name, len(order_data["passengers"])
+        return config, order_data["passengers"], output_name
 
 
-def office_binary() -> str | None:
-    return shutil.which("libreoffice") or shutil.which("soffice")
-
-
-def convert_docx_to_pdf(docx_bytes: bytes, docx_name: str) -> tuple[bytes, str]:
-    converter = office_binary()
-    if converter is None:
-        raise RuntimeError("当前环境没有 LibreOffice，无法转换 PDF。")
-
+def build_docx_from_data(
+    config: dict[str, Any],
+    passengers: list[dict[str, str]],
+    output_name: str,
+    template_path: Path,
+) -> bytes:
     with tempfile.TemporaryDirectory() as temp_dir_name:
         temp_dir = Path(temp_dir_name)
-        docx_path = temp_dir / docx_name
-        docx_path.write_bytes(docx_bytes)
+        output_path = temp_dir / output_name
+        fill_document(template_path, output_path, config, passengers)
+        return output_path.read_bytes()
 
-        completed = subprocess.run(
-            [
-                converter,
-                "--headless",
-                "--convert-to",
-                "pdf",
-                "--outdir",
-                str(temp_dir),
-                str(docx_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
+
+def build_docx(
+    uploaded_excel: Any,
+    route: str,
+    leaders: str,
+    leader_phone: str,
+    template_path: Path,
+) -> tuple[bytes, str, int]:
+    config, passengers, output_name = prepare_itinerary(uploaded_excel, route, leaders, leader_phone)
+    docx_bytes = build_docx_from_data(config, passengers, output_name, template_path)
+    return docx_bytes, output_name, len(passengers)
+
+
+def build_pdf(
+    config: dict[str, Any],
+    passengers: list[dict[str, str]],
+    output_name: str,
+) -> tuple[bytes, str]:
+    pdfmetrics.registerFont(UnicodeCIDFont("STSong-Light"))
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "ChineseTitle",
+        parent=styles["Title"],
+        fontName="STSong-Light",
+        fontSize=18,
+        leading=24,
+        alignment=TA_CENTER,
+        spaceAfter=10,
+    )
+    normal_style = ParagraphStyle(
+        "ChineseNormal",
+        parent=styles["Normal"],
+        fontName="STSong-Light",
+        fontSize=9,
+        leading=13,
+    )
+
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        rightMargin=14 * mm,
+        leftMargin=14 * mm,
+        topMargin=14 * mm,
+        bottomMargin=14 * mm,
+    )
+
+    travel_dates = " 至 ".join(
+        value
+        for value in (
+            format_chinese_date(str(config.get("start_date") or "")),
+            format_chinese_date(str(config.get("end_date") or "")),
         )
-        pdf_path = docx_path.with_suffix(".pdf")
-        if completed.returncode != 0 or not pdf_path.exists():
-            detail = (completed.stderr or completed.stdout or "LibreOffice 未返回可用错误信息").strip()
-            raise RuntimeError(f"PDF 转换失败：{detail}")
+        if value
+    )
+    summary_data = [
+        ["旅游路线", Paragraph(str(config.get("route") or ""), normal_style)],
+        ["旅行社", str(config.get("agency") or "")],
+        ["客源地", str(config.get("source") or "")],
+        ["出行时间", travel_dates],
+        ["领队", str(config.get("leaders") or "")],
+        ["领队电话", str(config.get("leader_phone") or "")],
+        ["操作人", str(config.get("operator") or "")],
+        ["操作电话", str(config.get("operator_phone") or "")],
+        ["旅客人数", str(len(passengers))],
+    ]
+    summary_table = Table(summary_data, colWidths=[28 * mm, 140 * mm])
+    summary_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), "STSong-Light"),
+                ("FONTSIZE", (0, 0), (-1, -1), 9),
+                ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eef5f2")),
+                ("TEXTCOLOR", (0, 0), (0, -1), colors.HexColor("#0f7b68")),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#cbd7d2")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 6),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]
+        )
+    )
 
-        return pdf_path.read_bytes(), pdf_path.name
+    passenger_rows = [["姓名", "证件类型", "证件号码", "手机号码"]]
+    passenger_rows.extend(
+        [
+            passenger["旅客姓名"],
+            passenger["旅客证件类型"],
+            passenger["旅客证件号码"],
+            passenger["旅客手机号码"],
+        ]
+        for passenger in passengers
+    )
+    passenger_table = Table(passenger_rows, repeatRows=1, colWidths=[25 * mm, 30 * mm, 70 * mm, 36 * mm])
+    passenger_table.setStyle(
+        TableStyle(
+            [
+                ("FONTNAME", (0, 0), (-1, -1), "STSong-Light"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#0f7b68")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("GRID", (0, 0), (-1, -1), 0.35, colors.HexColor("#cbd7d2")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 5),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ]
+        )
+    )
+
+    story = [
+        Paragraph("旅游团队行程单", title_style),
+        summary_table,
+        Spacer(1, 8 * mm),
+        Paragraph("旅客名单", normal_style),
+        Spacer(1, 3 * mm),
+        passenger_table,
+    ]
+    document.build(story)
+    return buffer.getvalue(), Path(output_name).with_suffix(".pdf").name
+
+
+def build_files(
+    uploaded_excel: Any,
+    route: str,
+    leaders: str,
+    leader_phone: str,
+    template_path: Path,
+) -> tuple[bytes, str, bytes, str, int]:
+    config, passengers, output_name = prepare_itinerary(uploaded_excel, route, leaders, leader_phone)
+    docx_bytes = build_docx_from_data(config, passengers, output_name, template_path)
+    pdf_bytes, pdf_name = build_pdf(config, passengers, output_name)
+    return docx_bytes, output_name, pdf_bytes, pdf_name, len(passengers)
 
 
 def main() -> None:
@@ -313,26 +430,14 @@ def main() -> None:
         st.error(f"找不到模板文件：{DEFAULT_TEMPLATE}")
     elif generate:
         try:
-            docx_bytes, filename, passenger_count = build_docx(
-                uploaded_excel,
-                route,
-                leaders,
-                leader_phone,
-                DEFAULT_TEMPLATE,
+            docx_bytes, filename, pdf_bytes, pdf_filename, passenger_count = build_files(
+                uploaded_excel, route, leaders, leader_phone, DEFAULT_TEMPLATE
             )
         except SystemExit as exc:
             st.error(str(exc))
         except Exception as exc:
             st.error(f"生成失败：{exc}")
         else:
-            pdf_bytes = None
-            pdf_filename = ""
-            with st.spinner("正在转换 PDF..."):
-                try:
-                    pdf_bytes, pdf_filename = convert_docx_to_pdf(docx_bytes, filename)
-                except Exception as exc:
-                    st.warning(f"Word 行程单已生成，但 PDF 暂时无法生成：{exc}")
-
             st.success("已生成行程单")
             metric_col, docx_col, pdf_col = st.columns([1, 2, 2])
             with metric_col:
@@ -348,10 +453,9 @@ def main() -> None:
             with pdf_col:
                 st.download_button(
                     "下载 PDF 行程单",
-                    data=pdf_bytes or b"",
-                    file_name=pdf_filename or Path(filename).with_suffix(".pdf").name,
+                    data=pdf_bytes,
+                    file_name=pdf_filename,
                     mime="application/pdf",
-                    disabled=pdf_bytes is None,
                     use_container_width=True,
                 )
     elif not can_generate:
