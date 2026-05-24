@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import tempfile
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -214,6 +216,43 @@ def build_docx(
         return output_path.read_bytes(), output_name, len(order_data["passengers"])
 
 
+def office_binary() -> str | None:
+    return shutil.which("libreoffice") or shutil.which("soffice")
+
+
+def convert_docx_to_pdf(docx_bytes: bytes, docx_name: str) -> tuple[bytes, str]:
+    converter = office_binary()
+    if converter is None:
+        raise RuntimeError("当前环境没有 LibreOffice，无法转换 PDF。")
+
+    with tempfile.TemporaryDirectory() as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        docx_path = temp_dir / docx_name
+        docx_path.write_bytes(docx_bytes)
+
+        completed = subprocess.run(
+            [
+                converter,
+                "--headless",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(temp_dir),
+                str(docx_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+        pdf_path = docx_path.with_suffix(".pdf")
+        if completed.returncode != 0 or not pdf_path.exists():
+            detail = (completed.stderr or completed.stdout or "LibreOffice 未返回可用错误信息").strip()
+            raise RuntimeError(f"PDF 转换失败：{detail}")
+
+        return pdf_path.read_bytes(), pdf_path.name
+
+
 def main() -> None:
     st.set_page_config(
         page_title="行程单生成工具",
@@ -226,7 +265,7 @@ def main() -> None:
         """
         <div class="tool-head">
           <h1>行程单生成工具</h1>
-          <p>上传订单 Excel，填写领队信息，生成可编辑 Word 行程单。</p>
+          <p>上传订单 Excel，填写领队信息，生成可编辑 Word 和 PDF 行程单。</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -286,16 +325,33 @@ def main() -> None:
         except Exception as exc:
             st.error(f"生成失败：{exc}")
         else:
+            pdf_bytes = None
+            pdf_filename = ""
+            with st.spinner("正在转换 PDF..."):
+                try:
+                    pdf_bytes, pdf_filename = convert_docx_to_pdf(docx_bytes, filename)
+                except Exception as exc:
+                    st.warning(f"Word 行程单已生成，但 PDF 暂时无法生成：{exc}")
+
             st.success("已生成行程单")
-            metric_col, download_col = st.columns([1, 2])
+            metric_col, docx_col, pdf_col = st.columns([1, 2, 2])
             with metric_col:
                 st.metric("旅客人数", passenger_count)
-            with download_col:
+            with docx_col:
                 st.download_button(
                     "下载 Word 行程单",
                     data=docx_bytes,
                     file_name=filename,
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True,
+                )
+            with pdf_col:
+                st.download_button(
+                    "下载 PDF 行程单",
+                    data=pdf_bytes or b"",
+                    file_name=pdf_filename or Path(filename).with_suffix(".pdf").name,
+                    mime="application/pdf",
+                    disabled=pdf_bytes is None,
                     use_container_width=True,
                 )
     elif not can_generate:
