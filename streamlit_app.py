@@ -281,6 +281,8 @@ def prepare_itinerary(
     route: str,
     leaders: str,
     leader_phone: str,
+    operator: str,
+    operator_phone: str,
 ) -> tuple[dict[str, Any], list[dict[str, str]], str]:
     with tempfile.TemporaryDirectory() as temp_dir_name:
         temp_dir = Path(temp_dir_name)
@@ -293,6 +295,8 @@ def prepare_itinerary(
             "route": route.strip(),
             "leaders": leaders.strip(),
             "leader_phone": leader_phone.strip(),
+            "operator": operator.strip(),
+            "operator_phone": operator_phone.strip(),
         }
         if order_data["start_date"]:
             config["start_date"] = order_data["start_date"]
@@ -323,9 +327,18 @@ def build_docx(
     route: str,
     leaders: str,
     leader_phone: str,
+    operator: str,
+    operator_phone: str,
     template_path: Path,
 ) -> tuple[bytes, str, int, dict[str, Any], list[dict[str, str]]]:
-    config, passengers, output_name = prepare_itinerary(uploaded_excel, route, leaders, leader_phone)
+    config, passengers, output_name = prepare_itinerary(
+        uploaded_excel,
+        route,
+        leaders,
+        leader_phone,
+        operator,
+        operator_phone,
+    )
     docx_bytes = build_docx_from_data(config, passengers, output_name, template_path)
     return docx_bytes, output_name, len(passengers), config, passengers
 
@@ -432,9 +445,29 @@ def main() -> None:
             value=str(defaults.get("leader_phone") or ""),
             placeholder="填写手机号",
         )
+    col3, col4 = st.columns(2)
+    with col3:
+        operator = st.text_input(
+            "计调",
+            value=str(defaults.get("operator") or DEFAULT_TRIP_FIELDS["operator"]),
+            placeholder="填写计调姓名",
+        )
+    with col4:
+        operator_phone = st.text_input(
+            "计调电话",
+            value=str(defaults.get("operator_phone") or DEFAULT_TRIP_FIELDS["operator_phone"]),
+            placeholder="填写计调电话",
+        )
 
     st.markdown('<div class="step-label">03 生成下载</div>', unsafe_allow_html=True)
-    can_generate = bool(uploaded_excel and route.strip() and leaders.strip() and leader_phone.strip())
+    can_generate = bool(
+        uploaded_excel
+        and route.strip()
+        and leaders.strip()
+        and leader_phone.strip()
+        and operator.strip()
+        and operator_phone.strip()
+    )
     generate = st.button("生成行程单", type="primary", disabled=not can_generate, use_container_width=True)
 
     if not DEFAULT_TEMPLATE.exists():
@@ -442,7 +475,13 @@ def main() -> None:
     elif generate:
         try:
             docx_bytes, filename, passenger_count, preview_config, preview_passengers = build_docx(
-                uploaded_excel, route, leaders, leader_phone, DEFAULT_TEMPLATE
+                uploaded_excel,
+                route,
+                leaders,
+                leader_phone,
+                operator,
+                operator_phone,
+                DEFAULT_TEMPLATE,
             )
         except SystemExit as exc:
             st.error(str(exc))
@@ -463,7 +502,7 @@ def main() -> None:
                 )
             render_preview(preview_config, preview_passengers, filename)
     elif not can_generate:
-        st.info("上传 Excel 并填写三个行程字段后即可生成。")
+        st.info("上传 Excel 并填写行程字段后即可生成。")
 
 
 if __name__ == "__main__":
