@@ -27,6 +27,7 @@ CSS = """
   --panel: #ffffff;
   --accent: #0f7b68;
   --accent-2: #c86f3d;
+  --focus: #188f79;
 }
 
 .stApp {
@@ -77,8 +78,38 @@ CSS = """
   font-weight: 700;
 }
 
-.stTextInput input {
+.field-note {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: -2px 0 8px;
+}
+
+[data-testid="stWidgetLabel"] p {
+  color: var(--ink);
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+
+.stTextInput input,
+[data-testid="stTextInput"] input,
+[data-baseweb="input"] input {
+  background: var(--panel) !important;
+  color: var(--ink) !important;
+  border: 1px solid var(--line) !important;
   border-radius: 6px;
+  min-height: 44px;
+  box-shadow: none !important;
+}
+
+.stTextInput input:focus,
+[data-testid="stTextInput"] input:focus,
+[data-baseweb="input"] input:focus {
+  border-color: var(--focus) !important;
+  box-shadow: 0 0 0 3px rgba(15, 123, 104, 0.14) !important;
+}
+
+.stTextInput input::placeholder {
+  color: #8a9691 !important;
 }
 
 .stButton > button,
@@ -95,10 +126,35 @@ CSS = """
 }
 
 [data-testid="stFileUploader"] {
-  background: rgba(255, 255, 255, 0.72);
+  background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 4px 14px 14px;
+  padding: 8px 14px 14px;
+}
+
+[data-testid="stFileUploader"] section {
+  background: #f6f8f5 !important;
+  border: 1px dashed #9eb1aa !important;
+  border-radius: 6px !important;
+}
+
+[data-testid="stFileUploader"] button {
+  background: var(--accent) !important;
+  color: white !important;
+  border-color: var(--accent) !important;
+  border-radius: 6px !important;
+}
+
+[data-testid="stFileUploader"] small,
+[data-testid="stFileUploader"] span,
+[data-testid="stFileUploader"] p {
+  color: var(--ink) !important;
+}
+
+[data-testid="stAlert"] {
+  background: #e8f4ff;
+  color: #19425f;
+  border-radius: 6px;
 }
 
 [data-testid="stMetricValue"] {
@@ -179,20 +235,36 @@ def main() -> None:
     defaults = app_config_defaults()
 
     st.markdown('<div class="step-label">01 上传订单</div>', unsafe_allow_html=True)
+    st.markdown(
+        '<div class="field-note">上传从订单系统导出的 Excel 文件，文件里需要有“订单数据”工作表。</div>',
+        unsafe_allow_html=True,
+    )
     uploaded_excel = st.file_uploader(
         "订单 Excel",
         type=["xlsx"],
-        label_visibility="collapsed",
+        label_visibility="visible",
         help="表格中需要包含工作表“订单数据”，以及旅客姓名、旅客证件类型、旅客证件号码、旅客手机号码列。",
     )
 
     st.markdown('<div class="step-label">02 填写行程信息</div>', unsafe_allow_html=True)
-    route = st.text_input("旅游路线", value=str(defaults.get("route") or ""))
+    route = st.text_input(
+        "旅游路线",
+        value=str(defaults.get("route") or ""),
+        placeholder="例如：西宁-祁连-七彩丹霞-敦煌-青海湖-西宁",
+    )
     col1, col2 = st.columns(2)
     with col1:
-        leaders = st.text_input("领队", value=str(defaults.get("leaders") or ""))
+        leaders = st.text_input(
+            "领队",
+            value=str(defaults.get("leaders") or ""),
+            placeholder="多个领队用顿号分隔",
+        )
     with col2:
-        leader_phone = st.text_input("领队电话", value=str(defaults.get("leader_phone") or ""))
+        leader_phone = st.text_input(
+            "领队电话",
+            value=str(defaults.get("leader_phone") or ""),
+            placeholder="填写手机号",
+        )
 
     st.markdown('<div class="step-label">03 生成下载</div>', unsafe_allow_html=True)
     can_generate = bool(uploaded_excel and route.strip() and leaders.strip() and leader_phone.strip())
