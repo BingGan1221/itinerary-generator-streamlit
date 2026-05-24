@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import os
-import shutil
-import subprocess
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -239,65 +236,6 @@ def build_docx(
     return docx_bytes, output_name, len(passengers)
 
 
-def office_binary() -> str | None:
-    return shutil.which("libreoffice") or shutil.which("soffice")
-
-
-def convert_docx_to_pdf(docx_bytes: bytes, docx_name: str) -> tuple[bytes, str]:
-    converter = office_binary()
-    if converter is None:
-        raise RuntimeError("PDF 需要服务器安装 LibreOffice。请稍后再试，或先下载 Word 行程单。")
-
-    with tempfile.TemporaryDirectory() as temp_dir_name:
-        temp_dir = Path(temp_dir_name)
-        docx_path = temp_dir / docx_name
-        docx_path.write_bytes(docx_bytes)
-        profile_dir = temp_dir / "libreoffice-profile"
-        env = {
-            **os.environ,
-            "HOME": str(temp_dir),
-        }
-
-        completed = subprocess.run(
-            [
-                converter,
-                "--headless",
-                "--nologo",
-                "--nofirststartwizard",
-                f"-env:UserInstallation=file://{profile_dir}",
-                "--convert-to",
-                "pdf",
-                "--outdir",
-                str(temp_dir),
-                str(docx_path),
-            ],
-            capture_output=True,
-            text=True,
-            timeout=120,
-            check=False,
-            env=env,
-        )
-        pdf_path = docx_path.with_suffix(".pdf")
-        if completed.returncode != 0 or not pdf_path.exists():
-            detail = (completed.stderr or completed.stdout or "LibreOffice 没有返回详细错误").strip()
-            raise RuntimeError(f"PDF 转换失败：{detail}")
-
-        return pdf_path.read_bytes(), pdf_path.name
-
-
-def build_files(
-    uploaded_excel: Any,
-    route: str,
-    leaders: str,
-    leader_phone: str,
-    template_path: Path,
-) -> tuple[bytes, str, bytes, str, int]:
-    config, passengers, output_name = prepare_itinerary(uploaded_excel, route, leaders, leader_phone)
-    docx_bytes = build_docx_from_data(config, passengers, output_name, template_path)
-    pdf_bytes, pdf_name = convert_docx_to_pdf(docx_bytes, output_name)
-    return docx_bytes, output_name, pdf_bytes, pdf_name, len(passengers)
-
-
 def main() -> None:
     st.set_page_config(
         page_title="行程单生成工具",
@@ -310,7 +248,7 @@ def main() -> None:
         """
         <div class="tool-head">
           <h1>行程单生成工具</h1>
-          <p>上传订单 Excel，填写领队信息，生成可编辑 Word 和 PDF 行程单。</p>
+          <p>上传订单 Excel，填写领队信息，生成可编辑 Word 行程单。</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -358,7 +296,7 @@ def main() -> None:
         st.error(f"找不到模板文件：{DEFAULT_TEMPLATE}")
     elif generate:
         try:
-            docx_bytes, filename, pdf_bytes, pdf_filename, passenger_count = build_files(
+            docx_bytes, filename, passenger_count = build_docx(
                 uploaded_excel, route, leaders, leader_phone, DEFAULT_TEMPLATE
             )
         except SystemExit as exc:
@@ -367,7 +305,7 @@ def main() -> None:
             st.error(f"生成失败：{exc}")
         else:
             st.success("已生成行程单")
-            metric_col, docx_col, pdf_col = st.columns([1, 2, 2])
+            metric_col, docx_col = st.columns([1, 3])
             with metric_col:
                 st.metric("旅客人数", passenger_count)
             with docx_col:
@@ -376,14 +314,6 @@ def main() -> None:
                     data=docx_bytes,
                     file_name=filename,
                     mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                    use_container_width=True,
-                )
-            with pdf_col:
-                st.download_button(
-                    "下载 PDF 行程单",
-                    data=pdf_bytes,
-                    file_name=pdf_filename,
-                    mime="application/pdf",
                     use_container_width=True,
                 )
     elif not can_generate:
