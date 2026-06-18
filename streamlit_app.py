@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from html import escape
+import json
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,8 @@ from generate_itinerary import (
     read_order_data,
 )
 
+
+ROUTE_CLIPBOARD = DEFAULT_CONFIG.parent / "route_clipboard.json"
 
 CSS = """
 <style>
@@ -258,6 +261,46 @@ CSS = """
 """
 
 
+def normalize_route_clipboard(routes: Any) -> list[str]:
+    if not isinstance(routes, list):
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for route in routes:
+        route_text = str(route or "").strip()
+        if route_text and route_text not in seen:
+            normalized.append(route_text)
+            seen.add(route_text)
+    return normalized
+
+
+def load_route_clipboard() -> list[str]:
+    if not ROUTE_CLIPBOARD.exists():
+        return []
+    try:
+        with ROUTE_CLIPBOARD.open("r", encoding="utf-8") as f:
+            routes = json.load(f)
+    except json.JSONDecodeError:
+        st.warning(f"路线库文件不是合法 JSON，已暂时忽略：{ROUTE_CLIPBOARD}")
+        return []
+    except OSError as exc:
+        st.warning(f"读取路线库失败，已暂时忽略：{exc}")
+        return []
+
+    if not isinstance(routes, list):
+        st.warning(f"路线库需要是 JSON 数组，已暂时忽略：{ROUTE_CLIPBOARD}")
+        return []
+    return normalize_route_clipboard(routes)
+
+
+def save_route_clipboard(routes: list[str]) -> None:
+    ROUTE_CLIPBOARD.parent.mkdir(parents=True, exist_ok=True)
+    with ROUTE_CLIPBOARD.open("w", encoding="utf-8") as f:
+        json.dump(normalize_route_clipboard(routes), f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
 def app_config_defaults() -> dict[str, Any]:
     if DEFAULT_CONFIG.exists():
         try:
@@ -413,6 +456,53 @@ def main() -> None:
     )
 
     defaults = app_config_defaults()
+    if "route" not in st.session_state:
+        st.session_state["route"] = str(defaults.get("route") or "")
+    if "route_clipboard" not in st.session_state:
+        st.session_state["route_clipboard"] = load_route_clipboard()
+
+    def use_selected_route() -> None:
+        selected_route = str(st.session_state.get("route_clipboard_selected") or "").strip()
+        if selected_route:
+            st.session_state["route"] = selected_route
+            st.session_state["route_clipboard_message"] = ("success", "已填入选中的旅游路线。")
+
+    def save_current_route() -> None:
+        current_route = str(st.session_state.get("route") or "").strip()
+        if not current_route:
+            st.session_state["route_clipboard_message"] = ("warning", "旅游路线为空，无法保存。")
+            return
+
+        routes = normalize_route_clipboard(st.session_state.get("route_clipboard", []))
+        if current_route in routes:
+            st.session_state["route_clipboard_selected"] = current_route
+            st.session_state["route_clipboard_message"] = ("info", "这条旅游路线已经在路线库里。")
+            return
+
+        routes.append(current_route)
+        save_route_clipboard(routes)
+        st.session_state["route_clipboard"] = routes
+        st.session_state["route_clipboard_selected"] = current_route
+        st.session_state["route_clipboard_message"] = ("success", "已保存当前旅游路线。")
+
+    def delete_selected_route() -> None:
+        selected_route = str(st.session_state.get("route_clipboard_selected") or "").strip()
+        if not selected_route:
+            st.session_state["route_clipboard_message"] = ("warning", "请先选择要删除的旅游路线。")
+            return
+
+        routes = [
+            route
+            for route in normalize_route_clipboard(st.session_state.get("route_clipboard", []))
+            if route != selected_route
+        ]
+        save_route_clipboard(routes)
+        st.session_state["route_clipboard"] = routes
+        if routes:
+            st.session_state["route_clipboard_selected"] = routes[0]
+        else:
+            st.session_state.pop("route_clipboard_selected", None)
+        st.session_state["route_clipboard_message"] = ("success", "已删除选中的旅游路线。")
 
     st.markdown('<div class="step-label">01 上传订单</div>', unsafe_allow_html=True)
     st.markdown(
@@ -429,9 +519,35 @@ def main() -> None:
     st.markdown('<div class="step-label">02 填写行程信息</div>', unsafe_allow_html=True)
     route = st.text_input(
         "旅游路线",
-        value=str(defaults.get("route") or ""),
+        key="route",
         placeholder="例如：西宁-祁连-七彩丹霞-敦煌-青海湖-西宁",
     )
+    routes = normalize_route_clipboard(st.session_state.get("route_clipboard", []))
+    st.session_state["route_clipboard"] = routes
+    if routes and st.session_state.get("route_clipboard_selected") not in routes:
+        st.session_state["route_clipboard_selected"] = routes[0]
+    if routes:
+        st.selectbox("路线库", routes, key="route_clipboard_selected")
+        route_action_col1, route_action_col2, route_action_col3 = st.columns(3)
+        with route_action_col1:
+            st.button("填入路线", on_click=use_selected_route, use_container_width=True)
+        with route_action_col2:
+            st.button("保存当前路线", on_click=save_current_route, use_container_width=True)
+        with route_action_col3:
+            st.button("删除选中路线", on_click=delete_selected_route, use_container_width=True)
+    else:
+        st.markdown('<div class="field-note">路线库为空，保存当前路线后下次可以直接选择填入。</div>', unsafe_allow_html=True)
+        st.button("保存当前路线", on_click=save_current_route, use_container_width=True)
+
+    if "route_clipboard_message" in st.session_state:
+        message_type, message_text = st.session_state.pop("route_clipboard_message")
+        if message_type == "success":
+            st.success(message_text)
+        elif message_type == "warning":
+            st.warning(message_text)
+        else:
+            st.info(message_text)
+
     col1, col2 = st.columns(2)
     with col1:
         leaders = st.text_input(

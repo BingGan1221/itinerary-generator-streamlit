@@ -18,15 +18,17 @@ python3 -m venv .venv
 .venv/bin/streamlit run streamlit_app.py
 ```
 
-注意：不要把真实订单 Excel、生成后的行程单、`.venv/` 或本地 `config/trip_config.json` 上传到 GitHub。仓库里只保留 `config/trip_config.example.json` 作为示例配置。
+注意：不要把真实订单 Excel、生成后的行程单、`.venv/`、本地 `config/trip_config.json` 或 `config/route_clipboard.json` 上传到 GitHub。仓库里只保留 `config/trip_config.example.json` 作为示例配置。
 
 ## 文件夹用途
 
 - `input/`：放订单 Excel，文件名保持 `订单列表_*.xlsx`。
 - `templates/`：放 Word 模板，默认使用 `行程单通用模版.docx`。
-- `config/`：放本地行程配置，默认使用 `trip_config.json`；可从 `trip_config.example.json` 复制。
+- `config/`：放本地行程配置和网页端路线库，默认配置使用 `trip_config.json`；路线库保存到 `route_clipboard.json`。
 - `output/`：生成后的行程单会放在这里。
 - `examples/`：参考 PDF、旧模板等样例文件。
+
+网页端填写“旅游路线”时，可以把常用路线保存到路线库；下次打开网页后从“路线库”选择并点击“填入路线”，也可以删除不再使用的路线。
 
 ## 使用方法
 
