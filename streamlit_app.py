@@ -21,6 +21,7 @@ from generate_itinerary import (
 
 
 ROUTE_CLIPBOARD = DEFAULT_CONFIG.parent / "route_clipboard.json"
+LEADER_CLIPBOARD = DEFAULT_CONFIG.parent / "leader_clipboard.json"
 
 CSS = """
 <style>
@@ -301,6 +302,57 @@ def save_route_clipboard(routes: list[str]) -> None:
         f.write("\n")
 
 
+def normalize_leader_clipboard(leaders: Any) -> list[dict[str, str]]:
+    if not isinstance(leaders, list):
+        return []
+
+    normalized: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for leader in leaders:
+        if not isinstance(leader, dict):
+            continue
+        leader_names = str(leader.get("leaders") or "").strip()
+        leader_phone = str(leader.get("leader_phone") or "").strip()
+        if not leader_names or not leader_phone:
+            continue
+        key = (leader_names, leader_phone)
+        if key in seen:
+            continue
+        normalized.append({"leaders": leader_names, "leader_phone": leader_phone})
+        seen.add(key)
+    return normalized
+
+
+def load_leader_clipboard() -> list[dict[str, str]]:
+    if not LEADER_CLIPBOARD.exists():
+        return []
+    try:
+        with LEADER_CLIPBOARD.open("r", encoding="utf-8") as f:
+            leaders = json.load(f)
+    except json.JSONDecodeError:
+        st.warning(f"领队库文件不是合法 JSON，已暂时忽略：{LEADER_CLIPBOARD}")
+        return []
+    except OSError as exc:
+        st.warning(f"读取领队库失败，已暂时忽略：{exc}")
+        return []
+
+    if not isinstance(leaders, list):
+        st.warning(f"领队库需要是 JSON 数组，已暂时忽略：{LEADER_CLIPBOARD}")
+        return []
+    return normalize_leader_clipboard(leaders)
+
+
+def save_leader_clipboard(leaders: list[dict[str, str]]) -> None:
+    LEADER_CLIPBOARD.parent.mkdir(parents=True, exist_ok=True)
+    with LEADER_CLIPBOARD.open("w", encoding="utf-8") as f:
+        json.dump(normalize_leader_clipboard(leaders), f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
+def leader_clipboard_label(leader: dict[str, str]) -> str:
+    return f"{leader['leaders']} / {leader['leader_phone']}"
+
+
 def app_config_defaults() -> dict[str, Any]:
     if DEFAULT_CONFIG.exists():
         try:
@@ -458,8 +510,14 @@ def main() -> None:
     defaults = app_config_defaults()
     if "route" not in st.session_state:
         st.session_state["route"] = str(defaults.get("route") or "")
+    if "leaders" not in st.session_state:
+        st.session_state["leaders"] = str(defaults.get("leaders") or "")
+    if "leader_phone" not in st.session_state:
+        st.session_state["leader_phone"] = str(defaults.get("leader_phone") or "")
     if "route_clipboard" not in st.session_state:
         st.session_state["route_clipboard"] = load_route_clipboard()
+    if "leader_clipboard" not in st.session_state:
+        st.session_state["leader_clipboard"] = load_leader_clipboard()
 
     def use_selected_route() -> None:
         selected_route = str(st.session_state.get("route_clipboard_selected") or "").strip()
@@ -503,6 +561,58 @@ def main() -> None:
         else:
             st.session_state.pop("route_clipboard_selected", None)
         st.session_state["route_clipboard_message"] = ("success", "已删除选中的旅游路线。")
+
+    def use_selected_leader() -> None:
+        selected_label = str(st.session_state.get("leader_clipboard_selected") or "").strip()
+        leaders = normalize_leader_clipboard(st.session_state.get("leader_clipboard", []))
+        selected_leader = next(
+            (leader for leader in leaders if leader_clipboard_label(leader) == selected_label),
+            None,
+        )
+        if selected_leader:
+            st.session_state["leaders"] = selected_leader["leaders"]
+            st.session_state["leader_phone"] = selected_leader["leader_phone"]
+            st.session_state["leader_clipboard_message"] = ("success", "已填入选中的领队信息。")
+
+    def save_current_leader() -> None:
+        current_leaders = str(st.session_state.get("leaders") or "").strip()
+        current_phone = str(st.session_state.get("leader_phone") or "").strip()
+        if not current_leaders or not current_phone:
+            st.session_state["leader_clipboard_message"] = ("warning", "领队和领队电话都要填写后才能保存。")
+            return
+
+        leaders = normalize_leader_clipboard(st.session_state.get("leader_clipboard", []))
+        current_leader = {"leaders": current_leaders, "leader_phone": current_phone}
+        current_label = leader_clipboard_label(current_leader)
+        if any(leader_clipboard_label(leader) == current_label for leader in leaders):
+            st.session_state["leader_clipboard_selected"] = current_label
+            st.session_state["leader_clipboard_message"] = ("info", "这组领队信息已经在领队库里。")
+            return
+
+        leaders.append(current_leader)
+        save_leader_clipboard(leaders)
+        st.session_state["leader_clipboard"] = leaders
+        st.session_state["leader_clipboard_selected"] = current_label
+        st.session_state["leader_clipboard_message"] = ("success", "已保存当前领队信息。")
+
+    def delete_selected_leader() -> None:
+        selected_label = str(st.session_state.get("leader_clipboard_selected") or "").strip()
+        if not selected_label:
+            st.session_state["leader_clipboard_message"] = ("warning", "请先选择要删除的领队信息。")
+            return
+
+        leaders = [
+            leader
+            for leader in normalize_leader_clipboard(st.session_state.get("leader_clipboard", []))
+            if leader_clipboard_label(leader) != selected_label
+        ]
+        save_leader_clipboard(leaders)
+        st.session_state["leader_clipboard"] = leaders
+        if leaders:
+            st.session_state["leader_clipboard_selected"] = leader_clipboard_label(leaders[0])
+        else:
+            st.session_state.pop("leader_clipboard_selected", None)
+        st.session_state["leader_clipboard_message"] = ("success", "已删除选中的领队信息。")
 
     st.markdown('<div class="step-label">01 上传订单</div>', unsafe_allow_html=True)
     st.markdown(
@@ -552,15 +662,42 @@ def main() -> None:
     with col1:
         leaders = st.text_input(
             "领队",
-            value=str(defaults.get("leaders") or ""),
+            key="leaders",
             placeholder="多个领队用顿号分隔",
         )
     with col2:
         leader_phone = st.text_input(
             "领队电话",
-            value=str(defaults.get("leader_phone") or ""),
+            key="leader_phone",
             placeholder="填写手机号",
         )
+    leader_entries = normalize_leader_clipboard(st.session_state.get("leader_clipboard", []))
+    st.session_state["leader_clipboard"] = leader_entries
+    leader_labels = [leader_clipboard_label(leader) for leader in leader_entries]
+    if leader_labels and st.session_state.get("leader_clipboard_selected") not in leader_labels:
+        st.session_state["leader_clipboard_selected"] = leader_labels[0]
+    if leader_labels:
+        st.selectbox("领队库", leader_labels, key="leader_clipboard_selected")
+        leader_action_col1, leader_action_col2, leader_action_col3 = st.columns(3)
+        with leader_action_col1:
+            st.button("填入领队", on_click=use_selected_leader, use_container_width=True)
+        with leader_action_col2:
+            st.button("保存当前领队", on_click=save_current_leader, use_container_width=True)
+        with leader_action_col3:
+            st.button("删除选中领队", on_click=delete_selected_leader, use_container_width=True)
+    else:
+        st.markdown('<div class="field-note">领队库为空，保存当前领队后下次可以直接选择填入。</div>', unsafe_allow_html=True)
+        st.button("保存当前领队", on_click=save_current_leader, use_container_width=True)
+
+    if "leader_clipboard_message" in st.session_state:
+        message_type, message_text = st.session_state.pop("leader_clipboard_message")
+        if message_type == "success":
+            st.success(message_text)
+        elif message_type == "warning":
+            st.warning(message_text)
+        else:
+            st.info(message_text)
+
     col3, col4 = st.columns(2)
     with col3:
         operator = st.text_input(

@@ -11,6 +11,7 @@ examples/
 # Local defaults may contain names or phone numbers.
 config/trip_config.json
 config/route_clipboard.json
+config/leader_clipboard.json
 
 # Streamlit local state
 .streamlit/secrets.toml
